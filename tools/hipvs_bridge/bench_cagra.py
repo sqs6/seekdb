@@ -87,14 +87,21 @@ def gen_data(rows, dim, seed=42):
     return rng.standard_normal((rows, dim), dtype=np.float32)
 
 
-def write_load_file(path, base, dim, batch=20000):
-    """写成 LOAD DATA 用的 CSV：id,v。v 是 seekdb 的向量字面量 [a,b,c]。"""
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
-        for start in range(0, base.shape[0], batch):
-            chunk = base[start:start + batch]
-            for i in range(chunk.shape[0]):
-                f.write("%d,[%s]\n" % (start + i, ",".join("%.6f" % x for x in chunk[i])))
-            f.flush()
+def insert_batches(base, dim, batch=20000):
+    """产出灌数据的 SQL 文本。
+
+    格式与基线自带的 docs/gpu-vector-index-hipvs-cuvs/validation/run_gpu_smoke.sh 一致：
+        insert into items values (0,'[0.1,0.2,...]'),(1,'[...]'),...;
+    向量字面量用单引号包住整个方括号，避免 LOAD DATA 的字段分隔与向量内部的逗号打架。
+    """
+    rows = base.shape[0]
+    for start in range(0, rows, batch):
+        chunk = base[start:start + batch]
+        parts = []
+        for i in range(chunk.shape[0]):
+            parts.append("(%d,'[%s]')" % (start + i,
+                                          ",".join("%.6f" % x for x in chunk[i])))
+        yield "insert into items values " + ",".join(parts) + ";\n"
 
 
 def exact_topk(base, queries, k, chunk=64):
@@ -125,12 +132,11 @@ def run_case(db, args, base, queries):
     db.run("alter system set ob_vector_memory_limit_percentage=40;")
     db.run("create table items(id int primary key, v vector(%d));" % dim)
     t0 = time.time()
-    r = db.run("use amdbench; load data local infile '%s' into table items "
-               "fields terminated by ',' optionally enclosed by '[' lines terminated by '\\n' "
-               "(id, v);" % args.load_file)
-    if r.returncode != 0:
-        print("LOAD DATA 失败：\n" + r.stderr[-2000:])
-        return None
+    for stmt in insert_batches(base, dim):
+        r = db.run("use amdbench; " + stmt)
+        if r.returncode != 0:
+            print("INSERT 失败：\n" + r.stderr[-2000:])
+            return None
     print("      灌数据耗时 %.1f s" % (time.time() - t0), flush=True)
     cnt = db.scalar("use amdbench; select count(*) from items;")
     print("      行数 = %s" % cnt, flush=True)
@@ -328,11 +334,9 @@ def main():
     ap.add_argument("--k", default="10,100")
     ap.add_argument("--table", default="items")
     ap.add_argument("--preset", default="candidate")
-    ap.add_argument("--load-file", default="/tmp/amdbench_load.csv")
     ap.add_argument("--out", default="")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--compare", nargs=2, metavar=("BASE", "CAND"))
-    ap.add_argument("--keep-data", action="store_true")
     args = ap.parse_args()
 
     if args.compare:
@@ -354,12 +358,8 @@ def main():
     if args.nq > queries.shape[0]:
         reps = int(args.nq / queries.shape[0]) + 1
         queries = np.tile(queries, (reps, 1))[:args.nq]
-    print("写 LOAD DATA 文件 ...", flush=True)
-    write_load_file(args.load_file, base, args.dim)
 
     res = run_case(db, args, base, queries)
-    if not args.keep_data and os.path.exists(args.load_file):
-        os.remove(args.load_file)
     if res is None:
         return 1
     print(json.dumps(res, indent=2, ensure_ascii=False))
