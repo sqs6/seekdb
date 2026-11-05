@@ -39,6 +39,13 @@
  *   SEEKDB_CUVS_REUSE_BUFFERS       1 = 复用显存缓冲（candidate 默认 1，baseline 固定 0）
  *   SEEKDB_CUVS_TRACE               1 = 打印分阶段耗时（stderr）
  */
+/* clock_gettime / CLOCK_MONOTONIC are POSIX, not ISO C. Ask for them explicitly so the
+ * file also compiles under a strict -std=c99 (the contest build uses plain hipcc, whose
+ * default is gnu17, where they are visible anyway). Must come before any #include. */
+#if !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "seekdb_cuvs_bridge.h"
 #include <cuvs/core/c_api.h>
 #include <cuvs/neighbors/cagra.h>
@@ -78,14 +85,14 @@ typedef struct {
 static int env_flag(const char* name, int def)
 {
   const char* v = getenv(name);
-  if (v == nullptr || v[0] == '\0') { return def; }
+  if (v == NULL || v[0] == '\0') { return def; }
   return (v[0] == '1' || v[0] == 't' || v[0] == 'T') ? 1 : 0;
 }
 
 static long env_long(const char* name, long def, long lo, long hi)
 {
   const char* v = getenv(name);
-  if (v == nullptr || v[0] == '\0') { return def; }
+  if (v == NULL || v[0] == '\0') { return def; }
   char* end = NULL;
   long x = strtol(v, &end, 10);
   if (end == v) { return def; }
@@ -114,7 +121,7 @@ static int preset_is_baseline(void)
   static int cached = -1;
   if (cached < 0) {
     const char* v = getenv("SEEKDB_CUVS_PRESET");
-    cached = (v != nullptr && strcmp(v, "baseline") == 0) ? 1 : 0;
+    cached = (v != NULL && strcmp(v, "baseline") == 0) ? 1 : 0;
   }
   return cached;
 }

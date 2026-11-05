@@ -49,15 +49,15 @@ Recall@100 从 0.9991 降到 0.9977（−0.0014，仍在 0.005 容忍带内）�
 
 默认 `nn_descent_niter=15`，可用 `SEEKDB_CUVS_NITER` 覆盖（1～1000）。
 
-### 3.2 查询：显存缓冲按 handle 复用 + `itopk` 下限下调
+### 3.2 查询：显存缓冲按 handle 复用（不动检索质量参数）
 
 * 基线每次查询做 3 次 `cuvsRMMAlloc` + 3 次 `cuvsRMMFree`。ROCm 上 `hipMalloc/hipFree`
   是同步调用，单次百微秒量级，而单行查询总延迟只有 7～12 ms —— 这部分占比不小。
   优化后 query / ids / dists 三个缓冲按 handle 缓存、按需增长，查询之间复用；
-  `cuvsCagraSearchParams` 也只创建一次。
-* `itopk` 直接决定搜索延迟（实测 512 → 2.75 ms，256 → 1.25 ms，128 → 0.70 ms）。
-  基线规则是 `itopk ≥ max(4*topk, 512)`，优化后下限降到 256。
-  128 会让 Recall@10 掉 0.0148（超门槛），256 实测无损。
+  `cuvsCagraSearchParams` 也只创建一次。**检索参数一个都没动**，因此返回结果与基线逐位一致。
+* `itopk` 下限**保持基线的 512 不动**。理由见第 5 节：这套参数是组织方专门为 256 维数据
+  调出来的，拿 2 分查询分去赌「Recall 掉出 0.005 → 总分 0」不划算。
+  需要时可用 `SEEKDB_CUVS_ITOPK_FLOOR=256` 单独试（Top-10 延迟约可减半）。
 
 ### 3.3 固定开销：快照写入与图序列化并行（`src/oblib/lib/vector/ob_vsag_adaptor.cpp`）
 
@@ -130,9 +130,30 @@ done
 
 ## 5. 风险与边界
 
-* **Recall 风险（最大）**：niter 从 100 降到 15 在 SIFT250K 上 Recall@10 保持 1.0000、
-  Recall@100 降 0.0014；但 Hidden250K（250K × 256）内容不公开、基线 Recall 更低，
-  降幅未知。**提交前必须在真实 AMD GPU 上按第 4 节跑完两个维度**，确认降幅 ≤ 0.005。
+### 5.1 冻结基线自己调过哪些参数（决定改动边界的依据）
+
+冻结基线的提交历史直接说明了组织方为质量做过哪些取舍：
+
+| 提交 | 说明 | 改动 |
+| --- | --- | --- |
+| `3d88d5bb5`（V3） | build quality CAGRA graph with NN-Descent | `build_algo = NN_DESCENT`、`nn_descent_niter = 100` |
+| `ad3253a52`（V4） | **raise CAGRA graph quality for 256d data** | `graph_degree 128`、`intermediate 256`；`itopk` 从 `topk*2` 提到 `max(4*topk,512)`；`search_width = 4` |
+| `58ddbd745`（V2） | support CAGRA searches above Top-64 | `itopk ≥ topk*2` |
+| `e0bba2c32`（V5） | build and persist GPU CAGRA on offline vector index DDL | 离线 DDL 路径真正在 GPU 上建图并持久化 GPU 快照 |
+
+**结论**：V4 那次「为 256 维数据提高图质量」改的是**图度数与检索宽度**，不是迭代次数。
+所以本方案只砍迭代次数（Recall 对迭代次数不敏感），**完整保留** `graph_degree=128`、
+`intermediate=256`、`itopk` 下限 512、`search_width=4` 这四项质量相关参数。
+
+### 5.2 风险清单
+
+* **Recall 风险（最大）**：`niter` 从 100 降到 15，在 SIFT250K（250K×128）上 Recall@10
+  保持 1.0000、Recall@100 只降 0.0014；但 **Hidden250K（250K×256）内容不公开**，
+  其基线 Recall 更低（0.985 / 0.914），降幅未知。
+  **提交前必须在真实 AMD GPU 上按第 4 节把两个维度都跑一遍**，确认降幅 ≤ 0.005；
+  若超了，把 `SEEKDB_CUVS_NITER` 调大（或改回 100）重新提交即可（一个常量的事）。
+* **查询性能分**：因为保守地保留了 `itopk` 下限 512，Top-10 的延迟收益拿不到，
+  查询分大概只能拿到 1 分左右。这是**故意**的取舍：查询分总共 2 分，而 Recall 掉出容忍带是 0 分。
 * **显存**：常驻缓冲比「每次查询现分配」多占一点显存，但远小于基线的 1.25 倍上限
   （query/ids/dist 三个缓冲按 topk 增长，最大几百 KB）。
 * **快照格式**：字段顺序变了、魔数升到 `OBCUVS03`，读写两端同步修改；
