@@ -92,6 +92,23 @@ magic | dim | reserved | n | ids | vectors | graph_bytes | graph
 
 ## 4. 可复现的测试方法
 
+### 4.1 bridge 自测（不需要 GPU）
+
+`seekdb_cuvs_bridge.c` 是本题链路里唯一直接调用 hipVS/cuVS 的地方。为了让改动能在
+没有 AMD GPU 的机器上（开发机、CI、评审环境）被验证，仓库里带了一套 cuVS 桩实现：
+
+```bash
+bash tools/hipvs_bridge/test/run_test.sh
+```
+
+只依赖 `gcc` + `libpthread`，覆盖：建图、单条检索（`itopk`/`search_width` 取值）、
+**连续检索下常驻显存缓冲复用是否会串数据**、批量检索 nq=64、序列化/反序列化往返、
+维度不匹配必须失败、释放不崩溃、环境变量覆盖。
+
+这套自测验的是 bridge 自己的逻辑；CAGRA 算法的正确性与性能只能在真实 GPU 上测（见 4.2）。
+
+### 4.2 端到端基准（需要真实 AMD GPU）
+
 ```bash
 # 依赖：AMD GPU + ROCm(/opt/rocm) + hipVS(/opt/hipvs) + g++/hipcc + python3(numpy) + mysql CLI
 bash tools/hipvs_bridge/bench_cagra.sh --rows 250000 --dim 128 --nq 4096
