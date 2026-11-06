@@ -131,7 +131,21 @@ Recall 用 CPU 暴力 L2 真值（`bench_cagra.py` 内算，不依赖外部 trut
 
 ### 参数扫描建议
 
-`niter` 是唯一主导建图耗时、也最容易伤到 Recall 的旋钮，建议按下面顺序扫：
+`niter` 是唯一主导建图耗时、也最容易伤到 Recall 的旋钮。**仓库里带了自动扫描脚本**：
+
+```bash
+bash tools/hipvs_bridge/sweep_niter.sh --rows 250000 --dim 256 --nq 4096
+```
+
+它逐个 niter 档位重启 observer（带对应环境变量）跑一轮，再跑一轮冻结基线，
+最后用 `bench_cagra.py --summary` 汇总成表，**自动挑出「Recall 降幅达标的前提下最快」
+的一档**，给出建议的构建分和该改的那一行常量。
+
+判定用的安全余量默认 0.003（官方门槛 0.005，贴着门槛线提测风险太大）。
+两个维度都要跑（`--dim 128` 对应 SIFT250K、`--dim 256` 对应 Hidden250K），
+**以 Hidden250K 的结论为准**（它占 60% 权重，且基线 Recall 更低，对 niter 更敏感）。
+
+手动扫的话：
 
 ```bash
 for n in 10 15 20 30 50; do

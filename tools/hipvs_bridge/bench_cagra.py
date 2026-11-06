@@ -206,6 +206,44 @@ def run_case(db, args, base, queries):
         print("      Top-%d: QPS=%.1f  P95=%.2f ms  Recall@%d=%.4f"
               % (k, qps, p95 * 1000, k, rec), flush=True)
 
+    # CPU 对照：同数据同参数的 lib=vsag（CPU HNSW）路径，用来给出「CPU vs GPU」的构建对比
+    if getattr(args, "with_cpu", False):
+        print("[CPU 对照] 建 lib=vsag（CPU 路径）索引 ...", flush=True)
+        db.run("use amdbench; drop table if exists items_cpu;")
+        db.run("use amdbench; create table items_cpu(id int primary key, v vector(%d));" % dim)
+        for stmt in insert_batches(base, dim):
+            db.run("use amdbench; " + stmt.replace("into items", "into items_cpu"))
+        t0 = time.time()
+        r = db.run("use amdbench; create vector index idx_items_cpu on items_cpu(v) "
+                   "with (distance=l2, type=hnsw, lib=vsag, m=16, ef_construction=200, ef_search=64);")
+        cpu_build_s = time.time() - t0
+        if r.returncode != 0:
+            print("      CPU 索引创建失败（跳过 CPU 对照）：\n" + r.stderr[-1500:])
+        else:
+            t1 = time.time()
+            db.rows("use amdbench; select id from items_cpu order by l2_distance(v, %s) "
+                    "approximate limit %d;" % (q0, k_list[0]))
+            cpu_first_s = time.time() - t1
+            cpu = {"build_total_s": round(cpu_build_s + cpu_first_s, 3),
+                   "build_sql_s": round(cpu_build_s, 3),
+                   "first_query_s": round(cpu_first_s, 4)}
+            # CPU 路径的查询延迟（抽样若干条即可看出量级）
+            lat = []
+            for i in range(min(64, queries.shape[0])):
+                lit = "[%s]" % ",".join("%.6f" % x for x in queries[i])
+                t0 = time.time()
+                db.rows("use amdbench; select id from items_cpu order by l2_distance(v, %s) "
+                        "approximate limit %d;" % (lit, k_list[0]))
+                lat.append(time.time() - t0)
+            lat.sort()
+            cpu["query_p50_ms"] = round(lat[len(lat) // 2] * 1000, 3)
+            results["cpu"] = cpu
+            print("      CPU 构建 %.2f s + 首查 %.3f s = %.2f s；CPU 查询 P50 %.2f ms"
+                  % (cpu_build_s, cpu_first_s, cpu["build_total_s"], cpu["query_p50_ms"]),
+                  flush=True)
+            print("      GPU 构建 %.2f s → CPU/GPU 构建比 %.2fx"
+                  % (build_total_s, cpu["build_total_s"] / build_total_s), flush=True)
+
     print("[5/5] 完成", flush=True)
     return results
 
@@ -241,6 +279,17 @@ def compare(base_path, cand_path, report_path=None):
         vc = c.get("vram_mb_after")
         if vb and vc:
             lines.append("| 显存峰值（MB） | %d | %d | %+.1f%% |" % (vb, vc, 100.0 * (vc - vb) / vb))
+    # CPU 对照：同一份数据、同一组索引参数的 lib=vsag（CPU HNSW）路径
+    cpu = c.get("cpu") or b.get("cpu")
+    if cpu:
+        lines.append("| CPU 路径 (lib=vsag) 构建耗时（含首查，s） | %.2f | %.2f | GPU 快 %.2fx |"
+                     % (cpu["build_total_s"], c["build_total_s"],
+                        cpu["build_total_s"] / c["build_total_s"]))
+        if cpu.get("query_p50_ms"):
+            gpu_p50 = c["queries"].get("top10", {}).get("p50_ms")
+            if gpu_p50:
+                lines.append("| Top-10 查询 P50（ms） | %.2f（CPU） | %.2f（GPU） | GPU 快 %.2fx |"
+                             % (cpu["query_p50_ms"], gpu_p50, cpu["query_p50_ms"] / gpu_p50))
     table = "\n".join(lines)
 
     print()
@@ -406,6 +455,8 @@ def main():
     ap.add_argument("--runs", default="", help="--summary 用的逗号分隔的运行结果 JSON")
     ap.add_argument("--margin", type=float, default=0.003,
                     help="Recall 降幅安全余量（官方门槛 0.005）")
+    ap.add_argument("--with-cpu", action="store_true",
+                    help="额外跑一轮 lib=vsag（CPU 路径）作为 CPU/GPU 构建对比")
     args = ap.parse_args()
 
     if args.summary:

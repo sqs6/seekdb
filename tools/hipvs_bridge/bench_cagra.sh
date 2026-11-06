@@ -71,10 +71,10 @@ SEEKDB_CUVS_PRESET=baseline SEEKDB_CUVS_TRACE=1 \
     --out "$OUT_DIR/baseline.json" "${EXTRA[@]+"${EXTRA[@]}"}" \
   2>&1 | tee "$OUT_DIR/baseline.log" || exit 1
 
-echo "===== [5/5] candidate 轮（优化后）====="
+echo "===== [5/5] candidate 轮（优化后，含 CPU 路径对照）====="
 SEEKDB_CUVS_PRESET=candidate SEEKDB_CUVS_TRACE=1 \
   python3 tools/hipvs_bridge/bench_cagra.py \
-    --rows "$ROWS" --dim "$DIM" --nq "$NQ" --preset candidate \
+    --rows "$ROWS" --dim "$DIM" --nq "$NQ" --preset candidate --with-cpu \
     --out "$OUT_DIR/candidate.json" "${EXTRA[@]+"${EXTRA[@]}"}" \
   2>&1 | tee "$OUT_DIR/candidate.log" || exit 1
 
