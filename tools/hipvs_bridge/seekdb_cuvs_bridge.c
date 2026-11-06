@@ -30,7 +30,7 @@
  *
  * 环境变量：
  *   SEEKDB_CUVS_PRESET              baseline | candidate（默认 candidate）
- *   SEEKDB_CUVS_NITER               NN-descent 迭代次数（candidate 默认 15，baseline 固定 100）
+ *   SEEKDB_CUVS_NITER               NN-descent 迭代次数（candidate 默认 10，baseline 固定 100）
  *   SEEKDB_CUVS_GRAPH_DEGREE        图上度（默认 128）
  *   SEEKDB_CUVS_INTERMEDIATE_DEGREE 中间图度数（默认 256）
  *   SEEKDB_CUVS_ITOPK               搜索 itopk（0 = 自动，规则 max(4*topk, floor)）
@@ -138,7 +138,7 @@ static void load_build_params(cuvsCagraIndexParams_t ip)
   ip->intermediate_graph_degree = (size_t)env_long(
       "SEEKDB_CUVS_INTERMEDIATE_DEGREE", 256, 16, 1024);
   ip->nn_descent_niter = (size_t)env_long(
-      "SEEKDB_CUVS_NITER", baseline ? 100 : 15, 1, 1000);
+      "SEEKDB_CUVS_NITER", baseline ? 100 : 10, 1, 1000);
   if (trace_enabled()) {
     fprintf(stderr,
             "[seekdb_cuvs] build params: preset=%s graph_degree=%zu intermediate=%zu niter=%zu\n",
