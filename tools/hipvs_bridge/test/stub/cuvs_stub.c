@@ -8,6 +8,7 @@
 #include <cuvs/core/c_api.h>
 #include <cuvs/neighbors/cagra.h>
 #include <dlpack/dlpack.h>
+#include "stub_observer.h"
 
 #ifdef __HIP_PLATFORM_AMD__
 #include <cuvs/cuda_runtime.h>
@@ -15,18 +16,9 @@
 #include <cuda_runtime.h>
 #endif
 
-/* 假的索引：只记 n / dim */
-struct stub_index {
-  long n;
-  long dim;
-  size_t graph_degree;
-  size_t intermediate;
-  size_t niter;
-};
-
 static const char* g_last_error = "stub: no error";
+/* 假的索引与观测点定义见 stub_observer.h */
 struct stub_index* g_last_built = NULL;
-/* 记录最近一次检索的参数，方便测试断言 */
 size_t g_last_itopk = 0;
 size_t g_last_width = 0;
 
