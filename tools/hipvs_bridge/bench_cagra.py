@@ -323,6 +323,69 @@ def _ln(x):
     return math.log(x) if x > 0 else float("-inf")
 
 
+def summary(baseline_path, run_paths, margin=0.003):
+    """把 baseline 与多档 niter 的结果汇总成表，并给出「Recall 达标前提下最快」的推荐。
+
+    官方硬门槛：Recall 相对同轮基线下降 ≤ 0.005（任一数据集/任一档位超了就是本次总分 0）。
+    这里用 margin（默认 0.003）留一点安全余量，避免贴着门槛线提测。
+    """
+    b = json.load(open(baseline_path, encoding="utf-8"))
+    rows = []
+    for p in run_paths:
+        try:
+            r = json.load(open(p, encoding="utf-8"))
+        except Exception as e:
+            print("  跳过 %s（%s）" % (p, e))
+            continue
+        br = b["build_total_s"]
+        cr = r["build_total_s"]
+        deltas = []
+        for k in sorted(set(b["queries"]) & set(r["queries"])):
+            deltas.append(r["queries"][k]["recall"] - b["queries"][k]["recall"])
+        worst = min(deltas) if deltas else 0.0        # 最负的那个差值
+        qratio = 1.0
+        bq = [b["queries"][k]["qps"] for k in sorted(b["queries"])]
+        cq = [r["queries"][k]["qps"] for k in sorted(r["queries"])]
+        if len(bq) == 2 and len(cq) == 2:
+            qratio = ((cq[0] / bq[0]) * (cq[1] / bq[1])) ** 0.5
+        rows.append({
+            "label": r.get("preset", p),
+            "build_s": cr,
+            "build_ratio": br / cr if cr > 0 else 0.0,
+            "recall": {k: r["queries"][k]["recall"] for k in sorted(r["queries"])},
+            "worst_delta": worst,
+            "q_ratio": qratio,
+        })
+    rows.sort(key=lambda x: -x["build_ratio"])
+
+    print()
+    print("| 配置 | 构建耗时(s) | 构建加速比 | " +
+          " | ".join("Recall@%s" % k.replace("top", "") for k in sorted(b["queries"])) +
+          " | Recall 最大降幅 | 查询加速比 | 结论 |")
+    print("| --- | ---: | ---: | " + " | ".join("---:" for _ in b["queries"]) +
+          " | ---: | ---: | --- |")
+    for r in rows:
+        safe = r["worst_delta"] >= -margin
+        verdict = "✅ 可用" if safe else "❌ Recall 降太多"
+        print("| %s | %.2f | %.2fx | %s | %.4f | %.2fx | %s |" % (
+            r["label"], r["build_s"], r["build_ratio"],
+            " | ".join("%.4f" % v for v in r["recall"].values()),
+            r["worst_delta"], r["q_ratio"], verdict))
+
+    ok = [r for r in rows if r["worst_delta"] >= -margin]
+    print()
+    if ok:
+        best = ok[0]
+        score = 14.0 * min(max(_ln(best["build_ratio"]) / _ln(3.0), 0.0), 1.0)
+        print("★ 推荐：preset=%s（构建加速 %.2fx，构建分约 %.1f/14，Recall 最大降幅 %.4f）"
+              % (best["label"], best["build_ratio"], score, -best["worst_delta"]))
+        print("  → 把 tools/hipvs_bridge/seekdb_cuvs_bridge.c 里 env_long(\"SEEKDB_CUVS_NITER\", 15, 1, 1000)")
+        print("    的默认值改成对应的 niter，重新编译后提交。")
+    else:
+        print("★ 没有任何一档满足 Recall 降幅 ≤ %.3f：不要降 niter，保留基线的 100。" % margin)
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default="127.0.0.1")
@@ -337,7 +400,19 @@ def main():
     ap.add_argument("--out", default="")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--compare", nargs=2, metavar=("BASE", "CAND"))
+    ap.add_argument("--summary", action="store_true",
+                    help="汇总扫描结果并给出推荐值")
+    ap.add_argument("--baseline", default="", help="--summary 用的 baseline JSON")
+    ap.add_argument("--runs", default="", help="--summary 用的逗号分隔的运行结果 JSON")
+    ap.add_argument("--margin", type=float, default=0.003,
+                    help="Recall 降幅安全余量（官方门槛 0.005）")
     args = ap.parse_args()
+
+    if args.summary:
+        if not args.baseline or not args.runs:
+            print("--summary 需要 --baseline 与 --runs")
+            return 2
+        return summary(args.baseline, [x for x in args.runs.split(",") if x], args.margin)
 
     if args.compare:
         compare(args.compare[0], args.compare[1])
