@@ -22,6 +22,27 @@ bash tools/hipvs_bridge/test/run_test.sh
 | 释放 | 不崩溃 |
 | 环境变量 | `SEEKDB_CUVS_ITOPK_FLOOR` 生效 |
 
+## 另一个脚本：baseline 预设 == 冻结基线
+
+```bash
+bash tools/hipvs_bridge/test/run_preset_equiv.sh
+```
+
+把**冻结基线那份 bridge**（从 git 里 `634888d9` 取）和**本实现的 bridge**
+（带 `SEEKDB_CUVS_PRESET=baseline`）用同一套桩实现各自编成可执行文件，跑同一个 driver，
+比较两边观测到的建图参数、检索参数与结果形状。
+
+**为什么必须有这个断言**：整套 A/B 方法论——拿 baseline 预设当对照组、用它算加速比与
+Recall 差值、再据此推荐 `niter`——全都建立在「baseline 预设 == 冻结基线」这个等式上。
+等式一旦不成立，本地量出来的加速比就是假的。
+
+实测两边完全一致：
+
+```
+build: niter=100 graph_degree=128 intermediate=256
+search: itopk=512 width=4
+```
+
 ## 桩头的边界
 
 `stub/` 下是**自测专用的假头文件**，签名按 cuVS C API 复刻，但语义是简化版：
